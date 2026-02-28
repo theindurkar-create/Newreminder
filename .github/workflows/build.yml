@@ -1,0 +1,341 @@
+
+name: Build SmartReminder APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install build tools
+        run: sdkmanager "build-tools;34.0.0" "platforms;android-34"
+
+      - name: Generate project files
+        run: |
+          cat > settings.gradle << 'ENDOFFILE'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "SmartReminder"
+          include ':app'
+          ENDOFFILE
+
+          cat > build.gradle << 'ENDOFFILE'
+          plugins {
+              id 'com.android.application' version '8.1.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.0' apply false
+              id 'com.google.devtools.ksp' version '1.9.0-1.0.13' apply false
+          }
+          ENDOFFILE
+
+          cat > gradle.properties << 'ENDOFFILE'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          ENDOFFILE
+
+          mkdir -p app
+          cat > app/build.gradle << 'ENDOFFILE'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+              id 'com.google.devtools.ksp'
+          }
+          android {
+              namespace 'com.smartreminder'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.smartreminder"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              kotlinOptions { jvmTarget = '1.8' }
+              buildFeatures { viewBinding true }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+              implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0'
+              implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.7.0'
+              implementation 'androidx.activity:activity-ktx:1.8.2'
+              implementation 'androidx.room:room-runtime:2.6.1'
+              implementation 'androidx.room:room-ktx:2.6.1'
+              ksp 'androidx.room:room-compiler:2.6.1'
+              implementation 'androidx.recyclerview:recyclerview:1.3.2'
+              implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+          }
+          ENDOFFILE
+
+          echo '-keep class com.smartreminder.** { *; }' > app/proguard-rules.pro
+
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml << 'ENDOFFILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+              <uses-permission android:name="android.permission.VIBRATE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.SmartReminder">
+                  <activity android:name=".ui.MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <activity android:name=".ui.AddTaskActivity" android:exported="false"
+                      android:windowSoftInputMode="adjustResize" />
+                  <activity android:name=".ui.ReminderActivity" android:exported="true"
+                      android:showOnLockScreen="true" android:turnScreenOn="true"
+                      android:launchMode="singleTask" android:excludeFromRecents="true"
+                      android:taskAffinity="" android:theme="@style/Theme.SmartReminder.Fullscreen" />
+                  <receiver android:name=".receiver.AlarmReceiver" android:exported="true" />
+                  <receiver android:name=".receiver.BootReceiver" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                      </intent-filter>
+                  </receiver>
+                  <service android:name=".receiver.ReminderService" android:exported="false"
+                      android:foregroundServiceType="remoteMessaging" />
+              </application>
+          </manifest>
+          ENDOFFILE
+
+          mkdir -p app/src/main/java/com/smartreminder/{data,parser,ui,receiver,viewmodel}
+          mkdir -p app/src/main/res/{layout,values,drawable,menu}
+          mkdir -p app/src/main/res/{mipmap-mdpi,mipmap-hdpi,mipmap-xhdpi,mipmap-xxhdpi,mipmap-xxxhdpi}
+
+          cat > app/src/main/java/com/smartreminder/data/Task.kt << 'ENDOFFILE'
+          package com.smartreminder.data
+          import androidx.room.Entity
+          import androidx.room.PrimaryKey
+          enum class Priority { LOW, NORMAL, HIGH, URGENT }
+          enum class RepeatType { NONE, DAILY, WEEKDAYS, WEEKLY, MONTHLY }
+          @Entity(tableName = "tasks")
+          data class Task(
+              @PrimaryKey(autoGenerate = true) val id: Long = 0,
+              val title: String,
+              val originalInput: String,
+              val dueTimeMillis: Long = 0L,
+              val repeatType: RepeatType = RepeatType.NONE,
+              val repeatDayOfWeek: Int = -1,
+              val priority: Priority = Priority.NORMAL,
+              val personTag: String = "",
+              val isCompleted: Boolean = false,
+              val snoozedUntilMillis: Long = 0L,
+              val snoozeCount: Int = 0,
+              val createdAtMillis: Long = System.currentTimeMillis(),
+              val suggestedNote: String = ""
+          )
+          ENDOFFILE
+
+          cat > app/src/main/java/com/smartreminder/data/TaskDao.kt << 'ENDOFFILE'
+          package com.smartreminder.data
+          import androidx.lifecycle.LiveData
+          import androidx.room.*
+          @Dao
+          interface TaskDao {
+              @Query("SELECT * FROM tasks WHERE isCompleted = 0 ORDER BY CASE WHEN dueTimeMillis = 0 THEN 1 ELSE 0 END, dueTimeMillis ASC")
+              fun getActiveTasks(): LiveData<List<Task>>
+              @Query("SELECT * FROM tasks WHERE isCompleted = 1 ORDER BY createdAtMillis DESC")
+              fun getCompletedTasks(): LiveData<List<Task>>
+              @Query("SELECT * FROM tasks WHERE id = :id")
+              suspend fun getTaskById(id: Long): Task?
+              @Query("SELECT * FROM tasks WHERE isCompleted = 0 AND dueTimeMillis > 0")
+              suspend fun getActiveTasksWithTime(): List<Task>
+              @Insert(onConflict = OnConflictStrategy.REPLACE)
+              suspend fun insertTask(task: Task): Long
+              @Update
+              suspend fun updateTask(task: Task)
+              @Delete
+              suspend fun deleteTask(task: Task)
+              @Query("DELETE FROM tasks WHERE id = :id")
+              suspend fun deleteById(id: Long)
+          }
+          ENDOFFILE
+
+          cat > app/src/main/java/com/smartreminder/data/AppDatabase.kt << 'ENDOFFILE'
+          package com.smartreminder.data
+          import android.content.Context
+          import androidx.room.*
+          @Database(entities = [Task::class], version = 1, exportSchema = false)
+          abstract class AppDatabase : RoomDatabase() {
+              abstract fun taskDao(): TaskDao
+              companion object {
+                  @Volatile private var INSTANCE: AppDatabase? = null
+                  fun getDatabase(context: Context): AppDatabase {
+                      return INSTANCE ?: synchronized(this) {
+                          Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "smart_reminder_db").build().also { INSTANCE = it }
+                      }
+                  }
+              }
+          }
+          ENDOFFILE
+
+          cat > app/src/main/java/com/smartreminder/data/TaskRepository.kt << 'ENDOFFILE'
+          package com.smartreminder.data
+          import android.app.AlarmManager
+          import android.app.PendingIntent
+          import android.content.Context
+          import android.content.Intent
+          import androidx.lifecycle.LiveData
+          import com.smartreminder.receiver.AlarmReceiver
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.withContext
+          class TaskRepository(private val context: Context) {
+              private val dao = AppDatabase.getDatabase(context).taskDao()
+              val activeTasks: LiveData<List<Task>> = dao.getActiveTasks()
+              val completedTasks: LiveData<List<Task>> = dao.getCompletedTasks()
+              suspend fun addTask(task: Task): Long = withContext(Dispatchers.IO) {
+                  dao.insertTask(task).also { id -> if (task.dueTimeMillis > 0) scheduleAlarm(task.copy(id = id)) }
+              }
+              suspend fun updateTask(task: Task) = withContext(Dispatchers.IO) {
+                  dao.updateTask(task); cancelAlarm(task.id)
+                  if (!task.isCompleted && task.dueTimeMillis > 0) scheduleAlarm(task)
+              }
+              suspend fun completeTask(task: Task) = withContext(Dispatchers.IO) {
+                  cancelAlarm(task.id); dao.updateTask(task.copy(isCompleted = true))
+              }
+              suspend fun deleteTask(task: Task) = withContext(Dispatchers.IO) {
+                  cancelAlarm(task.id); dao.deleteTask(task)
+              }
+              suspend fun snoozeTask(task: Task, snoozeMinutes: Int = 10) = withContext(Dispatchers.IO) {
+                  val newTime = System.currentTimeMillis() + snoozeMinutes * 60 * 1000L
+                  val count = task.snoozeCount + 1
+                  val pri = if (count >= 3 && task.priority != Priority.URGENT) Priority.HIGH else task.priority
+                  dao.updateTask(task.copy(snoozedUntilMillis = newTime, snoozeCount = count, priority = pri))
+                  scheduleAlarm(task.copy(snoozedUntilMillis = newTime), useSnoozeTime = true)
+              }
+              suspend fun rescheduleRepeatingTask(task: Task, nextTimeMillis: Long) = withContext(Dispatchers.IO) {
+                  dao.updateTask(task.copy(dueTimeMillis = nextTimeMillis, isCompleted = false, snoozeCount = 0, snoozedUntilMillis = 0L))
+                  scheduleAlarm(task.copy(dueTimeMillis = nextTimeMillis))
+              }
+              suspend fun rescheduleAllAlarms() = withContext(Dispatchers.IO) {
+                  val now = System.currentTimeMillis()
+                  dao.getActiveTasksWithTime().filter { it.dueTimeMillis > now }.forEach { scheduleAlarm(it) }
+              }
+              private fun scheduleAlarm(task: Task, useSnoozeTime: Boolean = false) {
+                  val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                  val pi = PendingIntent.getBroadcast(context, task.id.toInt(),
+                      Intent(context, AlarmReceiver::class.java).apply { putExtra("task_id", task.id) },
+                      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                  am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, if (useSnoozeTime) task.snoozedUntilMillis else task.dueTimeMillis, pi)
+              }
+              private fun cancelAlarm(taskId: Long) {
+                  val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                  PendingIntent.getBroadcast(context, taskId.toInt(), Intent(context, AlarmReceiver::class.java),
+                      PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let { am.cancel(it) }
+              }
+          }
+          ENDOFFILE
+
+          cat > app/src/main/java/com/smartreminder/parser/NLPParser.kt << 'ENDOFFILE'
+          package com.smartreminder.parser
+          import com.smartreminder.data.Priority
+          import com.smartreminder.data.RepeatType
+          import com.smartreminder.data.Task
+          import java.util.*
+          data class ParsedTask(val cleanTitle: String, val dueTimeMillis: Long, val repeatType: RepeatType,
+              val repeatDayOfWeek: Int, val priority: Priority, val personTag: String, val suggestedNote: String)
+          object NLPParser {
+              private val NAMES = setOf("nitesh","rahul","priya","amit","ravi","suresh","mohit","arjun",
+                  "john","jane","mike","sarah","david","emma","chris","anna","alex","sam","max","tom","jack","emily","mom","dad","boss")
+              fun parse(input: String): ParsedTask {
+                  val lower = input.lowercase().trim()
+                  val now = Calendar.getInstance()
+                  var dueTimeMillis = 0L; var repeatType = RepeatType.NONE; var repeatDayOfWeek = -1
+                  var priority = Priority.NORMAL; var personTag = ""; var workingText = input.trim()
+                  if (listOf("urgent","asap","immediately","critical","emergency").any { lower.contains(it) }) priority = Priority.URGENT
+                  else if (lower.contains("important") || lower.contains("high priority")) priority = Priority.HIGH
+                  else if (listOf("whenever","someday","eventually","no rush").any { lower.contains(it) }) priority = Priority.LOW
+                  val personRegex = Regex("""(?:to|with|for|from)\s+([A-Za-z]+)""", RegexOption.IGNORE_CASE)
+                  personRegex.find(lower)?.let { if (NAMES.contains(it.groupValues[1].lowercase())) personTag = it.groupValues[1].lowercase().replaceFirstChar { c -> c.uppercase() } }
+                  if (personTag.isEmpty()) NAMES.firstOrNull { Regex("""\b$it\b""", RegexOption.IGNORE_CASE).containsMatchIn(lower) }?.let { personTag = it.replaceFirstChar { c -> c.uppercase() } }
+                  val repeatMap = mapOf(
+                      Regex("""every\s+day|daily""") to (RepeatType.DAILY to -1),
+                      Regex("""every\s+weekday|weekdays""") to (RepeatType.WEEKDAYS to -1),
+                      Regex("""every\s+week|weekly""") to (RepeatType.WEEKLY to -1),
+                      Regex("""every\s+month|monthly""") to (RepeatType.MONTHLY to -1),
+                      Regex("""every\s+monday""") to (RepeatType.WEEKLY to Calendar.MONDAY),
+                      Regex("""every\s+tuesday""") to (RepeatType.WEEKLY to Calendar.TUESDAY),
+                      Regex("""every\s+wednesday""") to (RepeatType.WEEKLY to Calendar.WEDNESDAY),
+                      Regex("""every\s+thursday""") to (RepeatType.WEEKLY to Calendar.THURSDAY),
+                      Regex("""every\s+friday""") to (RepeatType.WEEKLY to Calendar.FRIDAY),
+                      Regex("""every\s+saturday""") to (RepeatType.WEEKLY to Calendar.SATURDAY),
+                      Regex("""every\s+sunday""") to (RepeatType.WEEKLY to Calendar.SUNDAY))
+                  for ((p, r) in repeatMap) { if (p.containsMatchIn(lower)) { repeatType = r.first; repeatDayOfWeek = r.second; workingText = p.replace(workingText, "", ignoreCase = true).trim(); break } }
+                  val cal = Calendar.getInstance(); var timeFound = false; var dateFound = false
+                  val relReg = Regex("""in\s+(\d+)\s+(minute|minutes|min|hour|hours|hr|day|days)""", RegexOption.IGNORE_CASE)
+                  relReg.find(lower)?.let { m ->
+                      val amt = m.groupValues[1].toInt()
+                      when { m.groupValues[2].startsWith("min") -> cal.add(Calendar.MINUTE, amt)
+                          m.groupValues[2].startsWith("hour") || m.groupValues[2].startsWith("hr") -> cal.add(Calendar.HOUR_OF_DAY, amt)
+                          else -> cal.add(Calendar.DAY_OF_YEAR, amt) }
+                      dueTimeMillis = cal.timeInMillis; timeFound = true; dateFound = true
+                      workingText = relReg.replace(workingText, "", ignoreCase = true).trim()
+                  }
+                  if (!dateFound) {
+                      val timeReg = Regex("""(\d{1,2})(?::(\d{2}))?\s*(am|pm)|noon|midnight|morning|afternoon|evening|night""", RegexOption.IGNORE_CASE)
+                      timeReg.find(lower)?.let { m ->
+                          val v = m.value.lowercase()
+                          when {
+                              v == "noon" -> { cal.set(Calendar.HOUR_OF_DAY, 12); cal.set(Calendar.MINUTE, 0) }
+                              v == "midnight" -> { cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0) }
+                              v == "morning" -> { cal.set(Calendar.HOUR_OF_DAY, 9); cal.set(Calendar.MINUTE, 0) }
+                              v == "afternoon" -> { cal.set(Calendar.HOUR_OF_DAY, 14); cal.set(Calendar.MINUTE, 0) }
+                              v == "evening" -> { cal.set(Calendar.HOUR_OF_DAY, 18); cal.set(Calendar.MINUTE, 0) }
+                              v == "night" -> { cal.set(Calendar.HOUR_OF_DAY, 21); cal.set(Calendar.MINUTE, 0) }
+                              else -> { var h = m.groupValues[1].toInt(); val min = m.groupValues[2].takeIf { it.isNotEmpty() }?.toInt() ?: 0
+                                  val ap = m.groupValues[3].lowercase()
+                                  if (ap == "pm" && h != 12) h += 12; if (ap == "am" && h == 12) h = 0
+                                  cal.set(Calendar.HOUR_OF_DAY, h); cal.set(Calendar.MINUTE, min) }
+                          }
+                          cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+                          timeFound = true; workingText = timeReg.replace(workingText, "", ignoreCase = true).trim()
+                      }
+                      when {
+                          lower.contains("day after tomorrow") -> { cal.add(Calendar.DAY_OF_YEAR, 2); dateFound = true; workingText = workingText.replace("day after tomorrow","",true).trim() }
+                          lower.contains("tomorrow") -> { cal.add(Calendar.DAY_OF_YEAR, 1); dateFound = true; workingText = workingText.replace("tomorrow","",true).trim() }
+                          lower.contains("today") || lower.contains("tonight") -> { dateFound = true; worki
